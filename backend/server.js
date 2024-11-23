@@ -96,7 +96,7 @@ app.post("/api/auth/forgot-password", async (req, res) => {
       from: process.env.EMAIL_USER,
       to: email,
       subject: "Restablecer contraseña",
-      text: `Haz clic en el siguiente enlace para restablecer tu contraseña: http://localhost:5000/api/auth/reset-password/${token}`,
+      text: `Haz clic en el siguiente enlace para restablecer tu contraseña: http://localhost:4000/api/auth/reset-password/${token}`,
     };
 
     transporter.sendMail(mailOptions, (error, info) => {
@@ -112,13 +112,24 @@ app.post("/api/auth/forgot-password", async (req, res) => {
 });
 
 // Ruta para verificar el token de restablecimiento
-app.get("/api/auth/forgot-password/:token", (req, res) => {
+app.get("/api/auth/forgot-password/:token", async (req, res) => {
   const { token } = req.params;
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    res.json({ message: "Token válido" });
+    const result = await pool.query(
+      "SELECT * FROM password_reset_tokens WHERE token = $1 AND expires_at > NOW()",
+      [token]
+    );
+
+    if (result.rowCount === 0) {
+      // Si no se encuentra el token o está expirado
+      return res.status(400).json({ message: "Token inválido o expirado" });
+    }
+
+    // Si el token es válido
+    res.status(200).json({ message: "Token válido" });
   } catch (err) {
-    res.status(400).json({ message: "Token inválido o expirado" });
+    console.error(err);
+    res.status(500).json({ message: "Error al verificar el token" });
   }
 });
 
@@ -135,6 +146,41 @@ app.post("/api/auth/forgot-password/:token", async (req, res) => {
     ]);
     res.status(200).json({ message: "Contraseña actualizada correctamente" });
   } catch (err) {
+    res.status(400).json({ message: "Token inválido o expirado" });
+  }
+});
+
+// Actualizar contraseña con token
+app.post("/auth/forgot-password/:token", async (req, res) => {
+  const { token } = req.params;
+
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+
+    const result = await pool.query(
+      "SELECT * FROM password_reset_tokens WHERE token = $1 AND expires_at > NOW()",
+      [token]
+    );
+
+    if (result.rowCount === 0) {
+      return res.status(400).json({ message: "Token inválido o expirado" });
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+    await pool.query("UPDATE users SET password = $1 WHERE id = $2", [
+      hashedPassword,
+      decoded.userId,
+    ]);
+    await pool.query("DELETE FROM password_reset_tokens WHERE token = $1", [
+      token,
+    ]);
+
+    res.status(200).json({ message: "Contraseña actualizada correctamente" });
+  } catch (err) {
+    console.error(err);
+    if (err.name === "TokenExpiredError") {
+      return res.status(400).json({ message: "El token ha expirado" });
+    }
     res.status(400).json({ message: "Token inválido o expirado" });
   }
 });
@@ -156,6 +202,7 @@ app.get("/api/auth/user", async (req, res) => {
     if (!user) {
       return res.status(404).json({ message: "Usuario no encontrado" });
     }
+    4;
     res.json(user); // Devolver la información del usuario
   } catch (err) {
     res.status(401).json({ message: "Token inválido o expirado" });
