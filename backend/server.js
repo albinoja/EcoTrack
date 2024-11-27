@@ -1,13 +1,16 @@
 const express = require("express");
 const bcrypt = require("bcryptjs");
+const crypto = require("crypto");
 const jwt = require("jsonwebtoken");
+
 const nodemailer = require("nodemailer");
 const pool = require("./lib/db");
+
 const cors = require("cors"); // Importar cors
 require("dotenv").config();
 
 const app = express();
-const port = 4000;
+const port = 3000;
 
 app.use(express.json());
 
@@ -20,196 +23,224 @@ const corsOptions = {
 
 app.use(cors(corsOptions)); // Habilitar CORS con las opciones configuradas
 
-// Configurar el transportador de correo
-const transporter = nodemailer.createTransport({
-  service: "gmail",
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS,
-  },
-});
+// Método para enviar el correo de verificación
+async function sendVerificationEmail(email, name, token) {
+  // Configuración de nodemailer
+  const transporter = nodemailer.createTransport({
+    service: "gmail", // Puedes usar otro proveedor de correo
+    auth: {
+      user: process.env.EMAIL_USER, // Tu correo electrónico
+      pass: process.env.EMAIL_PASS, // Tu contraseña de correo
+    },
+  });
 
-// Ruta de registro
+  const mailOptions = {
+    from: process.env.EMAIL_USER,
+    to: email,
+    subject: "Verificación de cuenta",
+    html: `<p>Hola: ${name}, confirma tu cuenta</p>
+              <p>Tu cuenta esta casi lista, solo debes confirmarla en el siguiente enlace:</p>
+              <a href="${process.env.FRONTEND_URL}/auth/confirmar-cuenta/${token}">Confirmar cuenta</a>
+              <p>Si no creaste esta cuenta, puedes ignorar este mensaje.</p>`,
+  };
+
+  try {
+    await transporter.sendMail(mailOptions);
+    console.log("Correo enviado");
+  } catch (err) {
+    console.error("Error al enviar correo:", err);
+  }
+}
+
+// Endpoint para registrar un nuevo usuario
 app.post("/api/auth/register", async (req, res) => {
   const { email, password, name } = req.body;
-  try {
-    const hashedPassword = await bcrypt.hash(password, 10);
-    const result = await pool.query(
-      "INSERT INTO users (email, password, name) VALUES ($1, $2, $3) RETURNING *",
-      [email, hashedPassword, name]
-    );
-    res.status(201).json(result.rows[0]);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: "Error registrando el usuario" });
-  }
-});
 
-// Ruta de inicio de sesión
-app.post("/api/auth/login", async (req, res) => {
-  const { email, password } = req.body;
+  // Validar que todos los campos estén presentes
+  if (!email || !password || !name) {
+    return res.status(400).json({ msg: "Todos los campos son obligatorios" });
+  }
+
+  // Evitar registros duplicados
   try {
     const result = await pool.query("SELECT * FROM users WHERE email = $1", [
       email,
     ]);
-    const user = result.rows[0];
-    if (!user) {
-      return res.status(400).json({ message: "Usuario no encontrado" });
+    if (result.rows.length > 0) {
+      return res.status(400).json({ msg: "Usuario ya registrado" });
     }
-
-    const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch) {
-      return res.status(400).json({ message: "Contraseña incorrecta" });
-    }
-
-    const token = jwt.sign({ userId: user.id }, process.env.JWT_SECRET, {
-      expiresIn: "1h",
-    });
-    res.json({ token });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ message: "Error al iniciar sesión" });
+    return res
+      .status(500)
+      .json({ msg: "Error al verificar el usuario en la base de datos" });
   }
-});
 
-// Ruta para recuperar contraseña
-app.post("/api/auth/forgot-password", async (req, res) => {
-  const { email } = req.body;
-  try {
-    const result = await pool.query("SELECT * FROM users WHERE email = $1", [
-      email,
-    ]);
-    const user = result.rows[0];
-    if (!user) {
-      return res.status(400).json({ message: "Usuario no encontrado" });
-    }
-
-    const token = jwt.sign({ userId: user.id }, process.env.JWT_SECRET, {
-      expiresIn: "15m",
+  // Validar la extensión del password
+  const MIN_PASSWORD_LENGTH = 8;
+  if (password.trim().length < MIN_PASSWORD_LENGTH) {
+    return res.status(400).json({
+      msg: `El password debe contener al menos ${MIN_PASSWORD_LENGTH} caracteres`,
     });
-    await pool.query(
-      "INSERT INTO password_reset_tokens (user_id, token, expires_at) VALUES ($1, $2, $3)",
-      [user.id, token, new Date(Date.now() + 15 * 60 * 1000)] // Token expira en 15 minutos
-    );
-
-    const mailOptions = {
-      from: process.env.EMAIL_USER,
-      to: email,
-      subject: "Restablecer contraseña",
-      text: `Haz clic en el siguiente enlace para restablecer tu contraseña: http://localhost:4000/api/auth/reset-password/${token}`,
-    };
-
-    transporter.sendMail(mailOptions, (error, info) => {
-      if (error) {
-        return res.status(500).json({ message: "Error al enviar el correo" });
-      }
-      res.status(200).json({ message: "Correo de restablecimiento enviado" });
-    });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: "Error al procesar la solicitud" });
   }
-});
 
-// Ruta para verificar el token de restablecimiento
-app.get("/api/auth/forgot-password/:token", async (req, res) => {
-  const { token } = req.params;
   try {
-    const result = await pool.query(
-      "SELECT * FROM password_reset_tokens WHERE token = $1 AND expires_at > NOW()",
-      [token]
-    );
-
-    if (result.rowCount === 0) {
-      // Si no se encuentra el token o está expirado
-      return res.status(400).json({ message: "Token inválido o expirado" });
-    }
-
-    // Si el token es válido
-    res.status(200).json({ message: "Token válido" });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: "Error al verificar el token" });
-  }
-});
-
-// Ruta para actualizar la contraseña
-app.post("/api/auth/forgot-password/:token", async (req, res) => {
-  const { token } = req.params;
-  const { password } = req.body;
-  try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    // Hashear la contraseña antes de guardarla
     const hashedPassword = await bcrypt.hash(password, 10);
-    await pool.query("UPDATE users SET password = $1 WHERE id = $2", [
-      hashedPassword,
-      decoded.userId,
-    ]);
-    res.status(200).json({ message: "Contraseña actualizada correctamente" });
+
+    // Generar token de verificación
+    const token = crypto.randomBytes(5).toString("hex"); // 5 bytes generan 10 caracteres hexadecimales
+
+    // Insertar el usuario en la base de datos
+    const newUser = await pool.query(
+      "INSERT INTO users (email, password, name, verified, admin, token) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, email, name, verified, admin, token",
+      [email, hashedPassword, name, false, false, token] // Los valores por defecto para verified y admin son 'false'
+    );
+
+    // Enviar correo con el token de verificación
+    await sendVerificationEmail(email, name, token);
+
+    res.status(201).json({
+      msg: "El usuario se creó correctamente, revisa tu email para verificar tu cuenta.",
+    });
   } catch (err) {
-    res.status(400).json({ message: "Token inválido o expirado" });
+    console.error(err);
+    res.status(500).json({ msg: "Error registrando el usuario" });
   }
 });
 
-// Actualizar contraseña con token
-app.post("/auth/forgot-password/:token", async (req, res) => {
+app.get("/api/auth/verify/:token", async (req, res) => {
   const { token } = req.params;
 
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-
-    const result = await pool.query(
-      "SELECT * FROM password_reset_tokens WHERE token = $1 AND expires_at > NOW()",
-      [token]
-    );
-
-    if (result.rowCount === 0) {
-      return res.status(400).json({ message: "Token inválido o expirado" });
-    }
-
-    const hashedPassword = await bcrypt.hash(password, 10);
-    await pool.query("UPDATE users SET password = $1 WHERE id = $2", [
-      hashedPassword,
-      decoded.userId,
-    ]);
-    await pool.query("DELETE FROM password_reset_tokens WHERE token = $1", [
+    // Consulta SQL para buscar el usuario con el token
+    const result = await pool.query("SELECT * FROM users WHERE token = $1", [
       token,
     ]);
 
-    res.status(200).json({ message: "Contraseña actualizada correctamente" });
-  } catch (err) {
-    console.error(err);
-    if (err.name === "TokenExpiredError") {
-      return res.status(400).json({ message: "El token ha expirado" });
+    // Verificar si el usuario existe
+    if (result.rows.length === 0) {
+      return res.status(401).json({ msg: "Hubo un error, token no válido" });
     }
-    res.status(400).json({ message: "Token inválido o expirado" });
+
+    const user = result.rows[0]; // Obtener el primer usuario que coincida con el token
+
+    // Confirmar la cuenta y actualizar el usuario
+    const updateResult = await pool.query(
+      "UPDATE users SET verified = $1, token = $2 WHERE id = $3",
+      [true, "", user.id] // Actualizar el estado de verificación y eliminar el token
+    );
+
+    res.json({ msg: "Usuario Confirmado Correctamente" });
+  } catch (error) {
+    console.log(error);
+    res.status(500).json({ msg: "Hubo un error al confirmar la cuenta" });
   }
 });
 
-// Endpoint para obtener la información del usuario autenticado
-app.get("/api/auth/user", async (req, res) => {
-  const token = req.headers.authorization?.split(" ")[1]; // Obtener el token de la cabecera Authorization
-  if (!token) {
-    return res.status(401).json({ message: "Token no proporcionado" });
+app.post("/api/auth/login", async (req, res) => {
+  const { email, password } = req.body;
+
+  // Validar que los campos estén presentes
+  if (!email || !password) {
+    return res
+      .status(400)
+      .json({ msg: "El email y la contraseña son obligatorios" });
   }
 
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    const result = await pool.query(
-      "SELECT id, email, name FROM users WHERE id = $1",
-      [decoded.userId]
-    );
-    const user = result.rows[0];
-    if (!user) {
-      return res.status(404).json({ message: "Usuario no encontrado" });
+    // Buscar al usuario en la base de datos
+    const result = await pool.query("SELECT * FROM users WHERE email = $1", [
+      email,
+    ]);
+
+    if (result.rows.length === 0) {
+      return res.status(401).json({ msg: "El Usuario no existe" });
     }
-    4;
-    res.json(user); // Devolver la información del usuario
+
+    const user = result.rows[0];
+
+    // Revisar si el usuario ha confirmado su cuenta
+    if (!user.verified) {
+      return res
+        .status(401)
+        .json({ msg: "Tu cuenta no ha sido confirmado aún" });
+    }
+
+    // Verificar la contraseña
+    const validPassword = await bcrypt.compare(password, user.password);
+    if (!validPassword) {
+      return res.status(401).json({ msg: "El password es incorrecto" });
+    }
+
+    // Generar el token JWT
+    const token = jwt.sign({ userId: user.id }, process.env.JWT_SECRET, {
+      expiresIn: "1h", // El token expirará en 1 hora, puedes ajustar este valor
+    });
+
+    // Responder con el token
+    return res.json({
+      token,
+    });
   } catch (err) {
-    res.status(401).json({ message: "Token inválido o expirado" });
+    console.error(err);
+    return res
+      .status(500)
+      .json({ msg: "Error al procesar la solicitud de inicio de sesión" });
   }
 });
 
-// Iniciar el servidor
+// Middleware para validar el token JWT
+const authenticateToken = (req, res, next) => {
+  const token = req.header("Authorization")?.replace("Bearer ", "");
+
+  if (!token) {
+    return res.status(401).json({ msg: "Acceso no autorizado" });
+  }
+
+  jwt.verify(token, process.env.JWT_SECRET, (err, decoded) => {
+    if (err) {
+      return res.status(403).json({ msg: "Token inválido o expirado" });
+    }
+
+    // Almacenar la información del usuario decodificado en el objeto req
+    req.user = decoded;
+    next();
+  });
+};
+
+// Endpoint para obtener la información del usuario autenticado
+app.get("/api/auth/user", authenticateToken, async (req, res) => {
+  const { userId } = req.user;
+
+  try {
+    // Consultar la base de datos para obtener el usuario por su ID
+    const result = await pool.query(
+      "SELECT id, name, email, admin FROM users WHERE id = $1",
+      [userId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ msg: "Usuario no encontrado" });
+    }
+
+    const user = result.rows[0];
+
+    // Formatear la respuesta
+    res.json({
+      _id: user.id, // Cambiar 'id' por '_id'
+      name: user.name,
+      email: user.email,
+      admin: user.admin,
+    });
+  } catch (err) {
+    console.error(err);
+    return res
+      .status(500)
+      .json({ msg: "Error al obtener los datos del usuario" });
+  }
+});
+
 app.listen(port, () => {
   console.log(`Servidor escuchando en http://localhost:${port}`);
 });
