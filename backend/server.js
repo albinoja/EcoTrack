@@ -52,6 +52,37 @@ async function sendVerificationEmail(email, name, token) {
   }
 }
 
+// Método para enviar el correo de verificación
+async function sendEmailPasswordReset(email, name, token) {
+  // Configuración de nodemailer
+  const transporter = nodemailer.createTransport({
+    service: "gmail", // Puedes usar otro proveedor de correo
+    auth: {
+      user: process.env.EMAIL_USER, // Tu correo electrónico
+      pass: process.env.EMAIL_PASS, // Tu contraseña de correo
+    },
+  });
+
+  const mailOptions = {
+    from: process.env.EMAIL_USER,
+    to: email,
+    subject: "Reestablece tu password",
+    text: "Reestablece tu password",
+    html: `<p>Hola: ${name}, has solicitado reestablecer tu password</p>
+            <p>Sigue el siguiente enlace para generar un nuevo password:</p>
+            <a href="${process.env.FRONTEND_URL}/auth/olvide-password/${token}">Reestablecer Password</a>
+            <p>Si tu no solicitaste esto, puedes ignorar este mensaje</p>
+        `,
+  };
+
+  try {
+    await transporter.sendMail(mailOptions);
+    console.log("Correo enviado");
+  } catch (err) {
+    console.error("Error al enviar correo:", err);
+  }
+}
+
 // Endpoint para registrar un nuevo usuario
 app.post("/api/auth/register", async (req, res) => {
   const { email, password, name } = req.body;
@@ -238,6 +269,114 @@ app.get("/api/auth/user", authenticateToken, async (req, res) => {
     return res
       .status(500)
       .json({ msg: "Error al obtener los datos del usuario" });
+  }
+});
+
+// Endpoint para manejar solicitudes de restablecimiento de contraseña
+app.post("/api/auth/forgot-password", async (req, res) => {
+  const { email } = req.body;
+
+  // Validar que se proporcione el email
+  if (!email) {
+    return res.status(400).json({ msg: "El email es obligatorio" });
+  }
+
+  try {
+    // Verificar si el usuario existe en la base de datos
+    const result = await pool.query("SELECT * FROM users WHERE email = $1", [
+      email,
+    ]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ msg: "El usuario no existe" });
+    }
+
+    const user = result.rows[0];
+
+    // Generar un token único para la recuperación de contraseña
+    const token = crypto.randomBytes(5).toString("hex"); // 5 bytes generan 10 caracteres hexadecimales
+
+    // Actualizar el token en la base de datos
+    await pool.query("UPDATE users SET token = $1 WHERE email = $2", [
+      token,
+      email,
+    ]);
+
+    // Enviar el correo con el token de restablecimiento
+    await sendEmailPasswordReset(email, user.name, token);
+
+    res.json({
+      msg: "Hemos enviado un email con las instrucciones",
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ msg: "Hubo un error al procesar la solicitud" });
+  }
+});
+
+// Endpoint para manejar el restablecimiento de la contraseña
+app.get("/api/auth/forgot-password/:token", async (req, res) => {
+  const { token } = req.params;
+
+  try {
+    // Consulta SQL para buscar el usuario con el token
+    const result = await pool.query("SELECT * FROM users WHERE token = $1", [
+      token,
+    ]);
+
+    if (result.rows.length === 0) {
+      return res.status(400).json({ msg: "Token no válido o expirado" });
+    }
+
+    // Si el token es válido
+    res.json({ msg: "Token Válido" });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ msg: "Error al verificar el token" });
+  }
+});
+
+app.post("/api/auth/forgot-password/:token", async (req, res) => {
+  const { token } = req.params;
+  const { password } = req.body;
+
+  // Validar que la contraseña esté presente
+  if (!password) {
+    return res.status(400).json({ msg: "La nueva contraseña es obligatoria" });
+  }
+
+  try {
+    // Buscar el usuario por el token en la base de datos PostgreSQL
+    const result = await pool.query("SELECT * FROM users WHERE token = $1", [
+      token,
+    ]);
+
+    if (result.rows.length === 0) {
+      return res.status(400).json({ msg: "Hubo un error, Token no válido" });
+    }
+
+    // Si el usuario es encontrado, actualizar la contraseña
+    const userId = result.rows[0].id; // Suponiendo que 'id' es el identificador del usuario en la tabla
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    // Actualizar la contraseña del usuario
+    const updateResult = await pool.query(
+      "UPDATE users SET password = $1, token = NULL WHERE id = $2 RETURNING *",
+      [hashedPassword, userId]
+    );
+
+    // Verificar si la actualización fue exitosa
+    if (updateResult.rows.length > 0) {
+      return res.json({ msg: "Contraseña actualizada correctamente" });
+    } else {
+      return res
+        .status(500)
+        .json({ msg: "No se pudo actualizar la contraseña" });
+    }
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ msg: "Error al procesar la solicitud" });
   }
 });
 
