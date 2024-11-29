@@ -18,7 +18,7 @@
         <div v-else class="grid grid-cols-1 gap-5 mt-10">
             <Appointment
                 v-for="appointment in user.userAppointments"
-                :key="appointment._id"
+                :key="appointment.id"
                 :appointment="appointment"
             />
         </div>

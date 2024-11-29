@@ -24,14 +24,14 @@
     <h2 class="text-4xl font-extrabold text-white">Detalles Cita y Resumen</h2>
     <p class="text-white text-lg">A continuación verifica la información y confirma tu cita</p>
 
-    <h3 class="text-3xl font-extrabold text-white">Servicios</h3>
+    <h3 class="text-3xl font-extrabold text-white">Servicio</h3>
 
-    <p v-if="appointments.noServicesSelected" class="text-white text-2xl text-center">No hay servicios seleccionados</p>
+    <p v-if="appointments.noServicesSelected" class="text-white text-2xl text-center">No hay servicio seleccionado</p>
 
     <div v-else class="grid gap-5">
         <SelectedService 
             v-for="service in appointments.services"
-            :key="service._id"
+            :key="service.id"
             :service="service"
         />
 

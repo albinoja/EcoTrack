@@ -7,7 +7,7 @@
 
 <template>
     <div class="flex justify-between">
-        <h1 class="text-2xl lg:text-6xl font-black text-white">App Salón</h1>
+        <h1 class="text-2xl lg:text-6xl font-black text-white">CitasMedULS</h1>
 
         <div class="flex flex-col space-y-5">
            <div class="flex gap-2 items-center">

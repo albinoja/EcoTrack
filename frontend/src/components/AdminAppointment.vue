@@ -24,7 +24,7 @@
                     Email: <span class="font-light"> {{ appointment.user.email }} </span>
                 </p>
 
-                <p class="text-lg font-black">Servicios Solicitados en la cita</p>
+                <p class="text-lg font-black">Servicio Solicitado en la cita</p>
                 <div v-for="service in appointment.services">
                     <p>{{ service.name }}</p>
                     <p class="text-2xl font-black text-blue-500">{{ formatCurrency( service.price ) }}</p>

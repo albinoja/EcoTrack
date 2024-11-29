@@ -4,6 +4,6 @@
 
 <template>
   <main>
-    <h1 class="text-3xl">AppSalon</h1>
+    <h1 class="text-3xl">CitasMedULS</h1>
   </main>
 </template>
