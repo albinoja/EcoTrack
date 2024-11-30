@@ -4,9 +4,11 @@ const crypto = require("crypto");
 const jwt = require("jsonwebtoken");
 
 const nodemailer = require("nodemailer");
+const { parse, isValid, formatISO, startOfDay, endOfDay } = require("date-fns");
 const pool = require("./lib/db");
 
 const cors = require("cors"); // Importar cors
+const { Console } = require("console");
 require("dotenv").config();
 
 const app = express();
@@ -22,6 +24,25 @@ const corsOptions = {
 };
 
 app.use(cors(corsOptions)); // Habilitar CORS con las opciones configuradas
+
+// Middleware para validar el token JWT
+const authenticateToken = (req, res, next) => {
+  const token = req.header("Authorization")?.replace("Bearer ", "");
+
+  if (!token) {
+    return res.status(401).json({ msg: "Acceso no autorizado" });
+  }
+
+  jwt.verify(token, process.env.JWT_SECRET, (err, decoded) => {
+    if (err) {
+      return res.status(403).json({ msg: "Token inválido o expirado" });
+    }
+
+    // Almacenar la información del usuario decodificado en el objeto req
+    req.user = decoded;
+    next();
+  });
+};
 
 // Método para enviar el correo de verificación
 async function sendVerificationEmail(email, name, token) {
@@ -78,6 +99,39 @@ async function sendEmailPasswordReset(email, name, token) {
   try {
     await transporter.sendMail(mailOptions);
     console.log("Correo enviado");
+  } catch (err) {
+    console.error("Error al enviar correo:", err);
+  }
+}
+
+async function sendEmailNewAppointment(email, name) {
+  try {
+    // Configuración de nodemailer
+    const transporter = nodemailer.createTransport({
+      service: "gmail", // Puedes usar otro proveedor de correo
+      auth: {
+        user: process.env.EMAIL_USER, // Tu correo electrónico
+        pass: process.env.EMAIL_PASS, // Tu contraseña de correo
+      },
+    });
+    const mailOptions = {
+      from: process.env.EMAIL_USER,
+      to: email.email,
+      subject: "Confirmación de cita médica CitasMedULS",
+      html: `
+        <p>Hola ${email.name},</p>
+        <p>Gracias por agendar una cita en <strong>ULS MED</strong>.</p>
+        <p>Tu cita ha sido confirmada. Te esperamos en la fecha y horario seleccionados.</p>
+        <p>Si tienes alguna duda o necesitas cambiar la fecha, no dudes en contactarnos.</p>
+        <br>
+        <p>Saludos cordiales,</p>
+        <p>El equipo de CitasMedULS</p>
+      `,
+    };
+
+    // Enviar correo electrónico
+    await transporter.sendMail(mailOptions);
+    console.log("Correo enviado exitosamente");
   } catch (err) {
     console.error("Error al enviar correo:", err);
   }
@@ -221,25 +275,6 @@ app.post("/api/auth/login", async (req, res) => {
   }
 });
 
-// Middleware para validar el token JWT
-const authenticateToken = (req, res, next) => {
-  const token = req.header("Authorization")?.replace("Bearer ", "");
-
-  if (!token) {
-    return res.status(401).json({ msg: "Acceso no autorizado" });
-  }
-
-  jwt.verify(token, process.env.JWT_SECRET, (err, decoded) => {
-    if (err) {
-      return res.status(403).json({ msg: "Token inválido o expirado" });
-    }
-
-    // Almacenar la información del usuario decodificado en el objeto req
-    req.user = decoded;
-    next();
-  });
-};
-
 // Endpoint para obtener la información del usuario autenticado
 app.get("/api/auth/user", authenticateToken, async (req, res) => {
   const { userId } = req.user;
@@ -260,6 +295,7 @@ app.get("/api/auth/user", authenticateToken, async (req, res) => {
     // Formatear la respuesta
     res.json({
       _id: user.id, // Cambiar 'id' por '_id'
+      id: user.id,
       name: user.name,
       email: user.email,
       admin: user.admin,
@@ -377,6 +413,161 @@ app.post("/api/auth/forgot-password/:token", async (req, res) => {
   } catch (error) {
     console.error(error);
     return res.status(500).json({ msg: "Error al procesar la solicitud" });
+  }
+});
+
+// Ruta protegida con el middleware authenticateToken
+app.get("/api/services", authenticateToken, async (req, res) => {
+  try {
+    // Consultar los servicios desde la base de datos PostgreSQL
+    const result = await pool.query("SELECT * FROM services");
+
+    // Retornar los servicios como respuesta en formato JSON
+    res.json(result.rows);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ msg: "Error al obtener los servicios" });
+  }
+});
+
+function formatDate(dateString) {
+  const options = { year: "numeric", month: "long", day: "numeric" };
+  const date = new Date(dateString);
+  return date.toLocaleDateString("es-ES", options);
+}
+
+app.post("/api/appointments", authenticateToken, async (req, res) => {
+  const appointment = req.body;
+
+  // Desestructurar los valores del cuerpo de la solicitud
+  const { date, time, totalAmount, user_id, services, email, name } =
+    appointment;
+
+  // Obtener el primer ID del servicio
+  const service_id = services && services.length > 0 ? services[0] : null;
+
+  function formatDate(dateString) {
+    const options = { year: "numeric", month: "long", day: "numeric" };
+    const date = new Date(dateString);
+    return date.toLocaleDateString("es-ES", options);
+  }
+
+  try {
+    // Inserción en la base de datos
+    const result = await pool.query(
+      "INSERT INTO appointments (date, time, user_id, total_amount, service_id) VALUES ($1, $2, $3, $4, $5) RETURNING *",
+      [date, time, user_id, totalAmount, service_id]
+    );
+
+    const newAppointmentUserId = result.rows[0].user_id;
+
+    // Llamar a la función para enviar el correo
+    try {
+      await sendEmailNewAppointment({
+        email,
+        name,
+      });
+    } catch (emailError) {
+      console.error("Error al enviar el correo:", emailError);
+      return res.status(500).json({ msg: "Error al enviar el correo" });
+    }
+
+    res.json({
+      msg: "Tu Reservación se realizó correctamente",
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ msg: "Error al crear la cita" });
+  }
+});
+
+app.get(
+  "/api/users/:userId/appointments",
+  authenticateToken,
+  async (req, res) => {
+    const { userId } = req.params; // Obtener el ID del usuario de los parámetros de la URL
+    const today = new Date();
+
+    // Formatear las fechas para consultar citas del día actual
+    const startOfDay = new Date(today.setHours(0, 0, 0, 0));
+    const endOfDay = new Date(today.setHours(23, 59, 59, 999));
+
+    try {
+      // Consulta para obtener citas del usuario del día actual
+      const result = await pool.query(
+        "SELECT a.id, a.date, a.time, a.total_amount, a.service_id, s.id AS service_id, s.name, s.price FROM appointments a INNER JOIN services s ON s.id = a.service_id WHERE user_id = $1",
+        [userId]
+      );
+
+      // Devolver las citas al cliente
+      res.json(result.rows);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ msg: "Error al obtener las citas del día" });
+    }
+  }
+);
+
+app.get("/api/appointments", authenticateToken, async (req, res) => {
+  const { date } = req.query; // Obtener la fecha desde la consulta
+
+  try {
+    // Validar que el parámetro 'date' esté presente
+    if (!date) {
+      return res
+        .status(400)
+        .json({ msg: "El parámetro 'date' es obligatorio" });
+    }
+
+    // Convertir la fecha del formato `dd/MM/yyyy` a un objeto Date
+    const parsedDate = parse(date, "dd/MM/yyyy", new Date());
+    if (!isValid(parsedDate)) {
+      return res
+        .status(400)
+        .json({ msg: "Fecha no válida. Use el formato dd/MM/yyyy" });
+    }
+
+    // Formatear la fecha a ISO para usarla en PostgreSQL
+    const isoDate = formatISO(parsedDate, { representation: "date" });
+
+    // Realizar la consulta a PostgreSQL
+    const query = `
+      SELECT * 
+      FROM appointments 
+      WHERE date >= CURRENT_DATE AND date <= $1
+    `;
+    const values = [isoDate];
+    const result = await pool.query(query, values);
+
+    // Devolver los resultados
+    res.json(result.rows);
+  } catch (error) {
+    console.error("Error al obtener las citas:", error);
+    res.status(500).json({ msg: "Error al obtener las citas" });
+  }
+});
+
+app.delete("/api/appointments/:id", authenticateToken, async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const result = await pool.query(
+      "SELECT * FROM appointments WHERE id = $1",
+      [id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ msg: "La Cita no existe" });
+    }
+
+    const appointment = result.rows[0];
+
+    await pool.query("DELETE FROM appointments WHERE id = $1", [id]);
+
+    res.json({ msg: "Cita Cancelada Exitosamente" });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ msg: "Error al cancelar la cita" });
   }
 });
 
