@@ -1,3 +1,4 @@
+import Swal from "sweetalert2";
 import { ref, computed, onMounted, inject, watch } from "vue";
 import { defineStore } from "pinia";
 import { useRouter } from "vue-router";
@@ -122,23 +123,42 @@ export const useAppointmentsStore = defineStore("appointments", () => {
   }
 
   async function cancelAppointment(id) {
-    if (confirm("¿Deseas cancelar esta cita?")) {
-      try {
+    try {
+      const result = await Swal.fire({
+        title: "¿Deseas cancelar esta cita?",
+        text: "Esta acción no se puede deshacer.",
+        icon: "warning",
+        showCancelButton: true,
+        confirmButtonText: "Sí, cancelar",
+        cancelButtonText: "No, mantener",
+        customClass: {
+          confirmButton: "custom-confirm-button",
+          cancelButton: "custom-cancel-button",
+        },
+      });
+
+      // Si el usuario confirma la acción
+      if (result.isConfirmed) {
         const { data } = await AppointmentAPI.delete(id);
+
+        // Muestra el mensaje de éxito con toast
         toast.open({
           message: data.msg,
           type: "success",
         });
 
+        // Actualiza la lista de citas del usuario
         user.userAppointments = user.userAppointments.filter(
           (appointment) => appointment.id !== id
         );
-      } catch (error) {
-        toast.open({
-          message: error.response.data.msg,
-          type: "error",
-        });
       }
+    } catch (error) {
+      // Si hay un error, muestra el mensaje de error con toast
+      toast.open({
+        message:
+          error.response?.data?.msg || "Hubo un error al cancelar la cita.",
+        type: "error",
+      });
     }
   }
 

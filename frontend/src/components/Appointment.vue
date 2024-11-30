@@ -44,12 +44,12 @@ defineProps({
     <!-- Botones de acción -->
     <div class="flex gap-4 mt-6">
       <!-- Editar Cita -->
-      <RouterLink
+      <!-- <RouterLink
         :to="{ name: 'edit-appointment', params: { id: appointment.id } }"
         class="bg-indigo-600 hover:bg-indigo-700 text-white text-sm py-3 px-6 rounded-lg font-semibold uppercase transition-colors duration-300 flex-1 md:flex-none"
       >
         Editar Cita
-      </RouterLink>
+      </RouterLink> -->
 
       <!-- Cancelar Cita -->
       <button
